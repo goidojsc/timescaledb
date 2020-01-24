@@ -35,6 +35,7 @@
 #include <access/reloptions.h>
 #include <access/sysattr.h>
 #include <miscadmin.h>
+#include <nodes/pg_list.h>
 #include <parser/parse_func.h>
 #include <parser/parse_type.h>
 #include <parser/parse_relation.h>
@@ -44,9 +45,10 @@
 #include <optimizer/clauses.h>
 #include <utils/builtins.h>
 #include <utils/catcache.h>
+#include <utils/int8.h>
 #include <utils/ruleutils.h>
 #include <utils/syscache.h>
-#include <utils/int8.h>
+#include <utils/typcache.h>
 
 #include "create.h"
 
@@ -63,10 +65,10 @@
 #include "continuous_agg.h"
 #include "options.h"
 #include "utils.h"
+#include "switch_ts_user.h"
 
 #define FINALFN "finalize_agg"
 #define PARTIALFN "partialize_agg"
-#define TIMEBUCKETFN "time_bucket"
 #define CHUNKIDFROMRELID "chunk_id_from_relid"
 #define DEFAULT_MATPARTCOLUMN_NAME "time_partition_col"
 #define MATPARTCOL_INTERVAL_FACTOR 10
@@ -75,29 +77,6 @@
 
 #define DEFAULT_MAX_INTERVAL_MULTIPLIER 20
 #define DEFAULT_MAX_INTERVAL_MAX_BUCKET_WIDTH (PG_INT64_MAX / DEFAULT_MAX_INTERVAL_MULTIPLIER)
-
-/*switch to ts user for _timescaledb_internal access */
-#define SWITCH_TO_TS_USER(schemaname, newuid, saved_uid, saved_secctx)                             \
-	do                                                                                             \
-	{                                                                                              \
-		if (schemaname &&                                                                          \
-			strncmp(schemaname, INTERNAL_SCHEMA_NAME, strlen(INTERNAL_SCHEMA_NAME)) == 0)          \
-			newuid = ts_catalog_database_info_get()->owner_uid;                                    \
-		else                                                                                       \
-			newuid = InvalidOid;                                                                   \
-		if (newuid != InvalidOid)                                                                  \
-		{                                                                                          \
-			GetUserIdAndSecContext(&saved_uid, &saved_secctx);                                     \
-			SetUserIdAndSecContext(uid, saved_secctx | SECURITY_LOCAL_USERID_CHANGE);              \
-		}                                                                                          \
-	} while (0)
-
-#define RESTORE_USER(newuid, saved_uid, saved_secctx)                                              \
-	do                                                                                             \
-	{                                                                                              \
-		if (newuid != InvalidOid)                                                                  \
-			SetUserIdAndSecContext(saved_uid, saved_secctx);                                       \
-	} while (0);
 
 #define PRINT_MATCOLNAME(colbuf, type, original_query_resno, colno)                                \
 	do                                                                                             \
@@ -136,37 +115,6 @@
 		selquery->hasRowSecurity = false;                                                          \
 	} while (0);
 
-typedef struct MatTableColumnInfo
-{
-	List *matcollist;		 /* column defns for materialization tbl*/
-	List *partial_seltlist;  /* tlist entries for populating the materialization table columns */
-	List *partial_grouplist; /* group clauses used for populating the materialization table */
-	List *mat_groupcolname_list; /* names of columns that are populated by the group-by clause
-									correspond to the partial_grouplist.
-									time_bucket column is not included here: it is the
-									matpartcolname */
-	int matpartcolno;			 /*index of partitioning column in matcollist */
-	char *matpartcolname;		 /*name of the partition column */
-} MatTableColumnInfo;
-
-typedef struct FinalizeQueryInfo
-{
-	List *final_seltlist;   /*select target list for finalize query */
-	Node *final_havingqual; /*having qual for finalize query */
-	Query *final_userquery; /* user query used to compute the finalize_query */
-} FinalizeQueryInfo;
-
-typedef struct CAggTimebucketInfo
-{
-	int32 htid;				/* hypertable id */
-	Oid htoid;				/* hypertable oid */
-	AttrNumber htpartcolno; /*primary partitioning column */
-							/* This should also be the column used by time_bucket */
-	Oid htpartcoltype;
-	int64 htpartcol_interval_len; /* interval length setting for primary partitioning column */
-	int64 bucket_width;			  /*bucket_width of time_bucket */
-} CAggTimebucketInfo;
-
 typedef struct AggPartCxt
 {
 	struct MatTableColumnInfo *mattblinfo;
@@ -176,8 +124,6 @@ typedef struct AggPartCxt
 } AggPartCxt;
 
 /* STATIC functions defined on the structs above */
-static void mattablecolumninfo_init(MatTableColumnInfo *matcolinfo, List *collist, List *tlist,
-									List *grouplist);
 static Var *mattablecolumninfo_addentry(MatTableColumnInfo *out, Node *input,
 										int original_query_resno);
 static void mattablecolumninfo_addinternal(MatTableColumnInfo *matcolinfo,
@@ -196,11 +142,6 @@ static void caggtimebucketinfo_init(CAggTimebucketInfo *src, int32 hypertable_id
 									int64 hypertable_partition_col_interval);
 static void caggtimebucket_validate(CAggTimebucketInfo *tbinfo, List *groupClause,
 									List *targetList);
-static void finalizequery_init(FinalizeQueryInfo *inp, Query *orig_query,
-							   MatTableColumnInfo *mattblinfo);
-static Query *finalizequery_get_select_query(FinalizeQueryInfo *inp, List *matcollist,
-											 ObjectAddress *mattbladdress);
-
 static bool is_valid_bucketing_function(Oid funcid);
 
 /* create a entry for the materialization table in table CONTINUOUS_AGGS */
@@ -693,7 +634,7 @@ cagg_agg_validate(Node *node, void *context)
 	return expression_tree_walker(node, cagg_agg_validate, context);
 }
 
-static CAggTimebucketInfo
+CAggTimebucketInfo
 cagg_validate_query(Query *query)
 {
 	CAggTimebucketInfo ret;
@@ -1058,7 +999,7 @@ is_valid_bucketing_function(Oid funcid)
 }
 
 /*initialize MatTableColumnInfo */
-static void
+void
 mattablecolumninfo_init(MatTableColumnInfo *matcolinfo, List *collist, List *tlist, List *grouplist)
 {
 	matcolinfo->matcollist = collist;
@@ -1366,7 +1307,7 @@ DO NOT modify orig_query. Make a copy if needed.
 SIDE_EFFCT: the data structure in mattblinfo is modified as a side effect by adding new materialize
 table columns and partialize exprs.
 */
-static void
+void
 finalizequery_init(FinalizeQueryInfo *inp, Query *orig_query, MatTableColumnInfo *mattblinfo)
 {
 	AggPartCxt cxt;
@@ -1450,7 +1391,7 @@ finalizequery_init(FinalizeQueryInfo *inp, Query *orig_query, MatTableColumnInfo
  * matcollist - column list for mat table
  * mattbladdress - materialization table ObjectAddress
  */
-static Query *
+Query *
 finalizequery_get_select_query(FinalizeQueryInfo *inp, List *matcollist,
 							   ObjectAddress *mattbladdress)
 {
@@ -1460,7 +1401,7 @@ finalizequery_get_select_query(FinalizeQueryInfo *inp, List *matcollist,
 	 * modify this to reflect the materialization table we just
 	 * created.
 	 */
-	RangeTblEntry *rte = list_nth(inp->final_userquery->rtable, 0);
+	RangeTblEntry *rte = llast(inp->final_userquery->rtable);
 	FromExpr *fromexpr;
 	Var *result;
 	rte->relid = mattbladdress->objectId;
@@ -1477,7 +1418,7 @@ finalizequery_get_select_query(FinalizeQueryInfo *inp, List *matcollist,
 	}
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
-	result = makeWholeRowVar(rte, 1, 0, true);
+	result = makeWholeRowVar(rte, list_length(inp->final_userquery->rtable), 0, true);
 	result->location = 0;
 	markVarForSelectPriv(NULL, result, rte);
 	/* 2. Fixup targetlist with the correct rel information */
@@ -1505,6 +1446,7 @@ finalizequery_get_select_query(FinalizeQueryInfo *inp, List *matcollist,
 	final_selquery->sortClause = inp->final_userquery->sortClause;
 	/* copy the having clause too */
 	final_selquery->havingQual = inp->final_havingqual;
+
 	return final_selquery;
 }
 
@@ -1640,6 +1582,11 @@ cagg_create(ViewStmt *stmt, Query *panquery, CAggTimebucketInfo *origquery_ht,
 	 */
 	final_selquery =
 		finalizequery_get_select_query(&finalqinfo, mattblinfo.matcollist, &mataddress);
+
+	if (with_clause_options[ContinuousViewOptionMaterializedOnly].is_default)
+		final_selquery =
+			cagg_build_union_query(origquery_ht, &mattblinfo, final_selquery, panquery);
+
 	create_view_for_query(final_selquery, stmt->view);
 
 	/* Step 3: create the internal view with select partialize(..)

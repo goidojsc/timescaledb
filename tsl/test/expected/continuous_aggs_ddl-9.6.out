@@ -28,7 +28,7 @@ SELECT _timescaledb_internal.stop_background_workers();
  t
 (1 row)
 
-create  view mat_m1 WITH ( timescaledb.continuous)
+create  view mat_m1 WITH ( timescaledb.continuous, timescaledb.materialized_only=true)
 AS
 Select sum( temperature ), min(location)
 from conditions
@@ -58,7 +58,7 @@ NOTICE:  adding not-null constraint to column "time"
  (3,public,foo,t)
 (1 row)
 
-CREATE VIEW rename_test WITH ( timescaledb.continuous)
+CREATE VIEW rename_test WITH ( timescaledb.continuous, timescaledb.materialized_only=true)
 AS SELECT time_bucket('1week', time), COUNT(data)
     FROM foo
     GROUP BY 1;
@@ -224,7 +224,7 @@ SELECT set_integer_now_func('drop_chunks_table', 'integer_now_test');
  
 (1 row)
 
-CREATE VIEW drop_chunks_view WITH ( timescaledb.continuous, timescaledb.refresh_interval='72 hours')
+CREATE VIEW drop_chunks_view WITH ( timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_interval='72 hours')
 AS SELECT time_bucket('5', time), COUNT(data)
     FROM drop_chunks_table
     GROUP BY 1;
@@ -386,7 +386,7 @@ SELECT set_integer_now_func('drop_chunks_table_u', 'integer_now_test1');
  
 (1 row)
 
-CREATE VIEW drop_chunks_view WITH ( timescaledb.continuous, timescaledb.refresh_interval='72 hours')
+CREATE VIEW drop_chunks_view WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_interval='72 hours')
 AS SELECT time_bucket('3', time), COUNT(data)
     FROM drop_chunks_table_u
     GROUP BY 1;
@@ -514,13 +514,13 @@ SELECT * FROM drop_chunks_view ORDER BY 1;
 
 \set ON_ERROR_STOP 0
 -- no continuous aggregates on a continuous aggregate materialization table
-CREATE VIEW new_name_view WITH ( timescaledb.continuous, timescaledb.refresh_interval='72 hours')
+CREATE VIEW new_name_view WITH ( timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_interval='72 hours')
 AS SELECT time_bucket('6', time_bucket), COUNT(agg_2_2)
     FROM new_name
     GROUP BY 1;
 ERROR:  hypertable is a continuous aggregate materialization table
 -- cannot create a continuous aggregate on a continuous aggregate view
-CREATE VIEW drop_chunks_view_view WITH ( timescaledb.continuous, timescaledb.refresh_interval='72 hours')
+CREATE VIEW drop_chunks_view_view WITH ( timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_interval='72 hours')
 AS SELECT time_bucket('6', time_bucket), SUM(count)
     FROM drop_chunks_view
     GROUP BY 1;
@@ -537,7 +537,7 @@ NOTICE:  adding not-null constraint to column "time"
 
 INSERT INTO metrics SELECT generate_series('2000-01-01'::timestamptz,'2000-01-10','1m'),1,0.25,0.75;
 -- check expressions in view definition
-CREATE VIEW cagg_expr WITH (timescaledb.continuous)
+CREATE VIEW cagg_expr WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 AS
 SELECT
   time_bucket('1d', time) AS time,

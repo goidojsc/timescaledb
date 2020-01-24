@@ -4,15 +4,23 @@
  * LICENSE-TIMESCALE for a copy of the license.
  */
 #include <postgres.h>
+#include <access/xact.h>
+#include <catalog/namespace.h>
+#include <commands/view.h>
+#include <miscadmin.h>
+#include <rewrite/rewriteHandler.h>
+#include <rewrite/rewriteManip.h>
 #include <utils/int8.h>
 #include <utils/builtins.h>
 
 #include "options.h"
 #include "continuous_agg.h"
+#include "continuous_aggs/create.h"
 #include "hypertable_cache.h"
 #include "cache.h"
 #include "scan_iterator.h"
 #include "job.h"
+#include "switch_ts_user.h"
 
 static inline int64
 parse_int_interval(const char *value, int64 min, int64 max, const char *option_name)
@@ -218,11 +226,89 @@ update_ignore_invalidation_older_than(ContinuousAgg *agg, int64 new_ignore_inval
 	ts_scan_iterator_close(&iterator);
 }
 
+static Oid
+relation_oid(NameData schema, NameData name)
+{
+	List *names = list_make2(makeString(NameStr(schema)), makeString(NameStr(name)));
+	return RangeVarGetRelid(makeRangeVarFromNameList(names), NoLock, false);
+}
+
+static void
+update_view_definition(ContinuousAgg *agg, Hypertable *mat_ht,
+					   WithClauseResult *with_clause_options)
+{
+	ListCell *lc1, *lc2;
+	int sec_ctx;
+	Oid uid, saved_uid;
+	/* cagg view created by the user */
+	Oid user_view_oid = relation_oid(agg->data.user_view_schema, agg->data.user_view_name);
+	Relation user_view_rel = try_relation_open(user_view_oid, AccessShareLock);
+	Query *user_query = get_view_query(user_view_rel);
+	relation_close(user_view_rel, AccessShareLock);
+
+	Oid direct_view_oid = relation_oid(agg->data.direct_view_schema, agg->data.direct_view_name);
+
+	Relation direct_view_rel = try_relation_open(direct_view_oid, AccessShareLock);
+	Query *direct_query = get_view_query(direct_view_rel);
+
+	CAggTimebucketInfo timebucket_exprinfo = cagg_validate_query(direct_query);
+
+	relation_close(direct_view_rel, AccessShareLock);
+	FinalizeQueryInfo fqi;
+	MatTableColumnInfo mattblinfo;
+	ObjectAddress mataddress = {
+		.classId = RelationRelationId,
+		.objectId = mat_ht->main_table_relid,
+	};
+
+	mattablecolumninfo_init(&mattblinfo, NIL, NIL, copyObject(direct_query->groupClause));
+	finalizequery_init(&fqi, direct_query, &mattblinfo);
+
+	Query *view_query = finalizequery_get_select_query(&fqi, mattblinfo.matcollist, &mataddress);
+
+	/* adjust varnos in targetlist */
+	Assert(list_length(view_query->rtable) > 1);
+	foreach (lc1, view_query->targetList)
+		ChangeVarNodes(lfirst(lc1), 1, list_length(view_query->rtable), 0);
+
+	if (with_clause_options[ContinuousViewOptionMaterializedOnly].parsed == BoolGetDatum(false))
+		view_query =
+			cagg_build_union_query(&timebucket_exprinfo, &mattblinfo, view_query, direct_query);
+
+	/*
+	 * adjust names in the targetlist of the updated view to match the view definition
+	 */
+	Assert(list_length(view_query->targetList) == list_length(user_query->targetList));
+
+	forboth (lc1, view_query->targetList, lc2, user_query->targetList)
+	{
+		TargetEntry *view_tle, *user_tle;
+		view_tle = lfirst(lc1);
+		user_tle = lfirst(lc2);
+		view_tle->resname = user_tle->resname;
+	}
+
+	SWITCH_TO_TS_USER(NameStr(agg->data.user_view_schema), uid, saved_uid, sec_ctx);
+	StoreViewQuery(user_view_oid, view_query, true);
+	CommandCounterIncrement();
+	RESTORE_USER(uid, saved_uid, sec_ctx);
+}
+
 void
 continuous_agg_update_options(ContinuousAgg *agg, WithClauseResult *with_clause_options)
 {
 	if (!with_clause_options[ContinuousEnabled].is_default)
 		elog(ERROR, "cannot disable continuous aggregates");
+
+	if (!with_clause_options[ContinuousViewOptionMaterializedOnly].is_default)
+	{
+		Cache *hcache = ts_hypertable_cache_pin();
+		Hypertable *mat_ht =
+			ts_hypertable_cache_get_entry_by_id(hcache, agg->data.mat_hypertable_id);
+
+		update_view_definition(agg, mat_ht, with_clause_options);
+		ts_cache_release(hcache);
+	}
 
 	if (!with_clause_options[ContinuousViewOptionRefreshLag].is_default)
 	{

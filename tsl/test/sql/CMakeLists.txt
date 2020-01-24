@@ -1,5 +1,6 @@
 set(TEST_FILES
   continuous_aggs_errors.sql
+  continuous_aggs_union_view.sql
   continuous_aggs_watermark.sql
   edition.sql
   gapfill.sql

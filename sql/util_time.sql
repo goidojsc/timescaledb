@@ -68,3 +68,16 @@ $BODY$;
 
 CREATE OR REPLACE FUNCTION _timescaledb_internal.time_to_internal(time_val ANYELEMENT)
 RETURNS BIGINT AS '@MODULE_PATHNAME@', 'ts_time_to_internal' LANGUAGE C VOLATILE STRICT;
+
+CREATE OR REPLACE FUNCTION _timescaledb_internal.cagg_watermark(hypertable_id oid) RETURNS INT8 LANGUAGE SQL AS $BODY$
+
+SELECT
+  watermark
+FROM
+  _timescaledb_catalog.continuous_agg cagg
+  LEFT JOIN _timescaledb_catalog.continuous_aggs_completed_threshold completed ON completed.materialization_id = cagg.mat_hypertable_id
+WHERE
+  cagg.raw_hypertable_id = $1;
+
+$BODY$ STABLE STRICT;
+

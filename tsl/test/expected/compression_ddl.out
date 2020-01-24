@@ -470,7 +470,7 @@ INFO:  materializing continuous aggregate public.test1_cont_view: nothing to inv
 SELECT count(*) FROM test1_cont_view;
  count 
 -------
-     6
+     8
 (1 row)
 
 \c :TEST_DBNAME :ROLE_SUPERUSER
@@ -583,7 +583,7 @@ AS sub;
 
 DROP TABLE test1 CASCADE;
 NOTICE:  drop cascades to table _timescaledb_internal.compress_hyper_4_57_chunk
-NOTICE:  drop cascades to 2 other objects
+NOTICE:  drop cascades to 3 other objects
 NOTICE:  drop cascades to table _timescaledb_internal._hyper_3_56_chunk
 DROP TABLESPACE tablespace1;
 DROP TABLESPACE tablespace2;

@@ -24,7 +24,7 @@ SELECT table_name FROM create_hypertable('device_readings', 'observation_time');
 
 --Next, create your continuous aggregate view
 CREATE VIEW device_summary
-WITH (timescaledb.continuous) --This flag is what makes the view continuous
+WITH (timescaledb.continuous, timescaledb.materialized_only=true) --This flag is what makes the view continuous
 AS
 SELECT
   time_bucket('1 hour', observation_time) as bucket, --time_bucket is required
@@ -125,7 +125,7 @@ SELECT * FROM device_summary WHERE device_id = 'device_1' and bucket = 'Sun Dec 
 
 DROP VIEW device_summary CASCADE;
 CREATE VIEW device_summary
-WITH (timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 AS
 SELECT
   time_bucket('1 hour', observation_time) as bucket,
@@ -143,7 +143,7 @@ GROUP BY bucket, device_id;
 
 DROP VIEW device_summary CASCADE;
 CREATE VIEW device_summary
-WITH (timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 AS
 SELECT
   time_bucket('1 hour', observation_time) as bucket,
@@ -161,7 +161,7 @@ DROP VIEW device_summary CASCADE;
 
 DROP VIEW device_summary CASCADE;
 CREATE VIEW device_summary
-WITH (timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 AS
 SELECT
   time_bucket('1 hour', observation_time) as bucket,

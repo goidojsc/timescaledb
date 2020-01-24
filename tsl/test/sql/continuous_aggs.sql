@@ -41,7 +41,7 @@ SELECT set_integer_now_func('foo', 'integer_now_foo');
 
 
 create or replace view mat_m1( a, countb )
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select a, count(b)
 from foo
@@ -99,7 +99,7 @@ insert into conditions values ( '2018-11-02 09:00:00-08', 'NYC', 35, 15);
 
 
 create or replace view mat_m1( timec, minl, sumt , sumh)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1day', timec), min(location), sum(temperature),sum(humidity)
 from conditions
@@ -160,7 +160,7 @@ insert into conditions values ( '2018-11-03 09:00:00-08', 'NYC', 35, 25);
 
 
 create or replace view mat_m1( timec, minl, sumth, stddevh)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec) ,
 min(location), sum(temperature)+sum(humidity), stddev(humidity)
@@ -205,7 +205,7 @@ order by time_bucket('1week', timec);
 -- apply where clause on result of mat_m1 --
 drop view mat_m1 cascade;
 create or replace view mat_m1( timec, minl, sumth, stddevh)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec) ,
 min(location), sum(temperature)+sum(humidity), stddev(humidity)
@@ -251,7 +251,7 @@ order by time_bucket('1week', timec);
 ---------test with having clause ----------------------
 drop view mat_m1 cascade;
 create or replace view mat_m1( timec, minl, sumth, stddevh)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec) ,
 min(location), sum(temperature)+sum(humidity), stddev(humidity)
@@ -317,7 +317,7 @@ select generate_series('2018-11-01 00:00'::timestamp, '2018-12-15 00:00'::timest
 --drop view mat_m1 cascade;
 --naming with AS clauses
 create or replace view mat_naming
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec) as bucket, location as loc, sum(temperature)+sum(humidity), stddev(humidity)
 from conditions
@@ -343,7 +343,7 @@ DROP VIEW mat_naming CASCADE;
 
 --naming with default names
 create or replace view mat_naming
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec), location, sum(temperature)+sum(humidity), stddev(humidity)
 from conditions
@@ -369,7 +369,7 @@ DROP VIEW mat_naming CASCADE;
 
 --naming with view col names
 create or replace view mat_naming (bucket, loc, sum_t_h, stdd)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec), location, sum(temperature)+sum(humidity), stddev(humidity)
 from conditions
@@ -394,7 +394,7 @@ order by attnum, attname;
 DROP VIEW mat_naming CASCADE;
 
 create or replace view mat_m1( timec, minl, sumth, stddevh)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1week', timec) ,
 min(location), sum(temperature)+sum(humidity), stddev(humidity)
@@ -564,7 +564,7 @@ select table_name from create_hypertable( 'conditions', 'timec');
 --no data in hyper table on purpose so that CASCADE is not required because of chunks
 
 create or replace view mat_drop_test( timec, minl, sumt , sumh)
-WITH ( timescaledb.continuous)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true)
 as
 select time_bucket('1day', timec), min(location), sum(temperature),sum(humidity)
 from conditions
@@ -638,7 +638,7 @@ CREATE TABLE conditions (
 select table_name from create_hypertable( 'conditions', 'timec');
 
 create or replace view mat_with_test( timec, minl, sumt , sumh)
-WITH ( timescaledb.continuous, timescaledb.refresh_lag = '5 hours', timescaledb.refresh_interval = '1h')
+WITH ( timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '5 hours', timescaledb.refresh_interval = '1h')
 as
 select time_bucket('1day', timec), min(location), sum(temperature),sum(humidity)
 from conditions
@@ -661,7 +661,7 @@ order by indexname;
 drop view mat_with_test cascade;
 --no additional indexes
 create or replace view mat_with_test( timec, minl, sumt , sumh)
-WITH ( timescaledb.continuous, timescaledb.refresh_lag = '5 hours', timescaledb.refresh_interval = '1h', timescaledb.create_group_indexes=false)
+WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '5 hours', timescaledb.refresh_interval = '1h', timescaledb.create_group_indexes=false)
 as
 select time_bucket('1day', timec), min(location), sum(temperature),sum(humidity)
 from conditions
@@ -692,7 +692,7 @@ CREATE OR REPLACE FUNCTION integer_now_conditions() returns int LANGUAGE SQL STA
 SELECT set_integer_now_func('conditions', 'integer_now_conditions');
 
 create or replace view mat_with_test( timec, minl, sumt , sumh)
-WITH ( timescaledb.continuous, timescaledb.refresh_lag = '500', timescaledb.refresh_interval = '2h')
+WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '500', timescaledb.refresh_interval = '2h')
 as
 select time_bucket(100, timec), min(location), sum(temperature),sum(humidity)
 from conditions
@@ -729,7 +729,7 @@ CREATE OR REPLACE FUNCTION integer_now_space_table() returns BIGINT LANGUAGE SQL
 SELECT set_integer_now_func('space_table', 'integer_now_space_table');
 
 CREATE VIEW space_view
-WITH (timescaledb.continuous, timescaledb.refresh_lag = '-2', timescaledb.refresh_interval = '72h')
+WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '-2', timescaledb.refresh_interval = '72h')
 AS SELECT time_bucket('4', time), COUNT(data)
    FROM space_table
    GROUP BY 1;
@@ -835,7 +835,7 @@ select generate_series(0, 200, 10), 'POR', 55, 75, 40, 70, NULL;
 
 
 create or replace view mat_ffunc_test
-WITH ( timescaledb.continuous, timescaledb.refresh_lag = '-200')
+WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '-200')
 as
 select time_bucket(100, timec), aggregate_to_test_ffunc_extra(timec, 1, 3, 'test'::text)
 from conditions
@@ -848,7 +848,7 @@ SELECT * FROM mat_ffunc_test;
 DROP view mat_ffunc_test cascade;
 
 create or replace view mat_ffunc_test
-WITH ( timescaledb.continuous, timescaledb.refresh_lag = '-200')
+WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '-200')
 as
 select time_bucket(100, timec), aggregate_to_test_ffunc_extra(timec, 4, 5, bigint '123')
 from conditions
@@ -861,7 +861,7 @@ SELECT * FROM mat_ffunc_test;
 --refresh mat view test when time_bucket is not projected --
 drop view mat_ffunc_test cascade;
 create or replace view mat_refresh_test
-WITH ( timescaledb.continuous, timescaledb.refresh_lag = '-200')
+WITH (timescaledb.continuous, timescaledb.materialized_only=true, timescaledb.refresh_lag = '-200')
 as
 select location, max(humidity)
 from conditions
